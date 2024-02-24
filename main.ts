@@ -1,4 +1,6 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { Menu, App, Editor, MarkdownView, 
+	Modal, Notice, Plugin, PluginSettingTab, 
+	Setting, Vault, TFile } from 'obsidian';
 
 // Remember to rename these classes and interfaces!
 
@@ -10,23 +12,187 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	mySetting: 'default'
 }
 
-export default class MyPlugin extends Plugin {
+// A function to add a term and definition to the glossary file
+// Glossary file is a markdown file with a format:
+// # glossary
+// term1:= definition1;
+// term2:= definition2;
+// ...
+function addToGlossary(vault: Vault, glossaryFile: TFile, new_term: string, new_definition: string): Promise<boolean> {
+	return new Promise(async (resolve, reject) => {
+		try{
+			let already_exists = false;
+			vault.process(glossaryFile, (content) => {
+				// Split the content into lines
+				const lines = content.split(';\n');
+				// Create a dictionary to store the terms and definitions
+				const glossary: { [key: string]: string } = {}; // Add index signature
+				// Iterate over each line
+				for (let line of lines) {
+					// Split the line into term and definition
+					const [term, definition] = line.split(':=');
+					// Add the term and definition to the dictionary
+					if (term.valueOf() === new_term.valueOf()) {
+						already_exists = true;
+						console.log('Term already exists in glossary %b', already_exists);
+						break;
+					}
+					glossary[term] = definition;
+				}
+
+				if (!already_exists) {
+					// Add the new term and definition to the dictionary
+					glossary[new_term] = new_definition;
+					// Convert the dictionary back into a string
+					let new_content = '';
+					for (let term in glossary) {
+						if (term === '') {
+							continue;
+						}
+						new_content += term + ':=' + glossary[term] + ';\n';
+					}
+					return new_content;
+				} else {
+					return content;
+				}
+			});
+			resolve(already_exists);
+		} catch (error) {
+			reject(error);
+		}
+	});
+}
+export default class GlossaryPlugin extends Plugin {
 	settings: MyPluginSettings;
 
 	async onload() {
 		await this.loadSettings();
+		console.log('loading plugin')
+
 
 		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+		const ribbonIconEl = this.addRibbonIcon('book-a', 'Glossary', (evt: MouseEvent) => {
+
+			// Opens the glossary file in a new tab on left click
+			if (evt.button === 0) {
+				// Called when the user clicks the icon.
+				new Notice('Opening glossary...');
+				this.app.workspace.openLinkText('glossary.md', '', true);
+			}
+
+			// Opens menu on right click
+			if (evt.button === 2) {
+				const menu = new Menu();
+				// Opens the glossary file in a new tab
+				menu.addItem(item => {
+					item.setTitle('Open Glossary');
+					item.setIcon('book-a');
+					item.onClick(() => {
+						this.app.workspace.openLinkText('glossary.md', '', true);
+					});
+				});
+
+				// Adds the highlighted text to the glossary
+				menu.addItem(item => {
+					item.setTitle('Add to Glossary');
+					item.setIcon('plus');
+					item.onClick(async () => {
+						const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+						if (activeView) {
+							// Get selected text
+							const selectedText = activeView.editor.getSelection().toLowerCase();
+							let new_term: string = 'term';
+							let new_definition: string = 'definition';
+
+							// Call the modal to get the term and definition
+							await new Promise(resolve => { // Wait for the modal to close
+								new AddToGlossaryModal(this.app, selectedText, async (term, definition) => {
+									new_term = term;
+									new_definition = definition;
+									console.log('new term: %s, new definition: %s', new_term, new_definition);
+
+									new Notice('Adding ' + new_term + ' to glossary...');
+
+									// Find glossary file
+									const glossaryFile = this.app.vault.getFileByPath('glossary.md');
+									if (glossaryFile) {
+										// Read glossary file
+										const { vault } = this.app;
+										// Add the selected text to the glossary
+										const result = await addToGlossary(vault, glossaryFile, new_term, new_definition);
+										console.log('exists: %b', result);
+										if (result) {
+											new Notice('Term already exists in glossary');
+										} else {
+											new Notice('Added ' + new_term + ' to glossary');
+										}
+											
+									} else {
+										new Notice('Glossary file not found');
+									}
+
+								}).open();
+							});
+						}
+					});
+				});
+				
+				menu.showAtPosition({ x: evt.clientX, y: evt.clientY });
+			}
+
 		});
 		// Perform additional things with the ribbon
 		ribbonIconEl.addClass('my-plugin-ribbon-class');
 
 		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
 		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+		statusBarItemEl.setText('Glossary active!');
+
+		// This adds a simple command to add a term to the glossary
+		this.addCommand({
+			id: 'add-to-glossary',
+			name: 'Add to Glossary',
+			editorCallback: async (editor: Editor, view: MarkdownView) => {
+				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (activeView) {
+					// Get selected text
+					const selectedText = activeView.editor.getSelection().toLowerCase();
+					let new_term: string = 'term';
+					let new_definition: string = 'definition';
+
+					// Call the modal to get the term and definition
+					await new Promise(resolve => { // Wait for the modal to close
+						new AddToGlossaryModal(this.app, selectedText, async (term, definition) => {
+							new_term = term;
+							new_definition = definition;
+							console.log('new term: %s, new definition: %s', new_term, new_definition);
+
+							new Notice('Adding ' + new_term + ' to glossary...');
+
+							// Find glossary file
+							const glossaryFile = this.app.vault.getFileByPath('glossary.md');
+							if (glossaryFile) {
+								// Read glossary file
+								const { vault } = this.app;
+								// Add the selected text to the glossary
+								const result = await addToGlossary(vault, glossaryFile, new_term, new_definition);
+								console.log('exists: %b', result);
+								if (result) {
+									new Notice('Term already exists in glossary');
+								} else {
+									new Notice('Added ' + new_term + ' to glossary');
+								}
+									
+							} else {
+								new Notice('Glossary file not found');
+							}
+
+						}).open();
+					});
+					
+				}
+			}
+		});
 
 		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
@@ -79,7 +245,7 @@ export default class MyPlugin extends Plugin {
 	}
 
 	onunload() {
-
+		console.log('unloading plugin')
 	}
 
 	async loadSettings() {
@@ -88,6 +254,48 @@ export default class MyPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+}
+
+// A model for adding a term to the glossary
+class AddToGlossaryModal extends Modal {
+	new_term: string;
+	new_definition: string;
+	onSubmit: (term: string, definition: string) => void;
+
+	constructor(app: App, new_term: string, onSubmit: (term: string, definition: string) => void) {
+		super(app);
+		this.new_term = new_term;
+		this.onSubmit = onSubmit;
+	}
+
+	onOpen(): void {
+		const {contentEl} = this;
+		contentEl.createEl('h1', {text: 'Add to Glossary'});
+		
+		new Setting(contentEl).setName('Term').addText((text) =>
+			text.setValue(this.new_term).onChange((value) => {
+				this.new_term = value;
+			})
+		);
+
+		new Setting(contentEl).setName('Definition').addText((text) =>
+			text.onChange((value) => {
+				this.new_definition = value;
+			})
+		);
+
+		new Setting(contentEl).addButton((button) => 
+			button.setButtonText('Add').setCta().onClick(() => {
+				this.onSubmit(this.new_term, this.new_definition);
+				this.close();
+			})
+		);
+	}
+
+	onClose(): void {
+		const {contentEl} = this;
+		contentEl.empty();
 	}
 }
 
@@ -108,9 +316,9 @@ class SampleModal extends Modal {
 }
 
 class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+	plugin: GlossaryPlugin;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: GlossaryPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
